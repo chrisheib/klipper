@@ -44,10 +44,19 @@ class CartKinematics:
                                             self._motor_off)
         # Setup boundary checks
         max_velocity, max_accel = toolhead.get_max_velocity()
-        self.max_z_velocity = config.getfloat('max_z_velocity', max_velocity,
-                                              above=0., maxval=max_velocity)
-        self.max_z_accel = config.getfloat('max_z_accel', max_accel,
-                                           above=0., maxval=max_accel)
+
+        # Setup per-axis velocity limits
+        self.axis_velocity_limits = tuple(
+            config.getfloat('max_{}_velocity'.format(axis), max_velocity,
+                above=0., maxval=max_velocity)
+            for axis in 'xyz')
+
+        # Setup per-axis acceleration limits
+        self.axis_accel_limits = tuple(
+            config.getfloat('max_{}_accel'.format(axis), max_accel, above=0.,
+                maxval=max_accel)
+            for axis in 'xyz')
+
         self.limits = [(1.0, -1.0)] * 3
     def get_steppers(self):
         return [s for rail in self.rails for s in rail.get_steppers()]
@@ -100,20 +109,19 @@ class CartKinematics:
                 if self.limits[i][0] > self.limits[i][1]:
                     raise move.move_error("Must home axis first")
                 raise move.move_error()
+
     def check_move(self, move):
-        limits = self.limits
-        xpos, ypos = move.end_pos[:2]
-        if (xpos < limits[0][0] or xpos > limits[0][1]
-            or ypos < limits[1][0] or ypos > limits[1][1]):
-            self._check_endstops(move)
-        if not move.axes_d[2]:
-            # Normal XY move - use defaults
-            return
-        # Move with Z - update velocity and accel for slower Z axis
         self._check_endstops(move)
-        z_ratio = move.move_d / abs(move.axes_d[2])
-        move.limit_speed(
-            self.max_z_velocity * z_ratio, self.max_z_accel * z_ratio)
+        # enforce per-axis velocity, acceleration limits
+        for axis_d, max_v, max_a in zip(
+            move.axes_d,
+            self.axis_velocity_limits,
+            self.axis_accel_limits
+        ):
+            if(axis_d):
+                ratio = abs(move.move_d / axis_d)
+                move.limit_speed(max_v * ratio, max_a * ratio)
+
     def get_status(self, eventtime):
         axes = [a for a, (l, h) in zip("xyz", self.limits) if l <= h]
         return {
